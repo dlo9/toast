@@ -659,7 +659,7 @@ fn entry() -> Result<(), Failure> {
                     vec![],
                     false,
                     vec![],
-                    vec![],
+                    HashMap::new(),
                     "root".to_owned(),
                 )
             };
