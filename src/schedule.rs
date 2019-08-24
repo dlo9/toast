@@ -92,6 +92,7 @@ mod tests {
             mount_paths: vec![],
             mount_readonly: false,
             ports: vec![],
+            docker_args: vec![],
             location: Path::new(DEFAULT_LOCATION).to_owned(),
             user: DEFAULT_USER.to_owned(),
             command: String::new(),

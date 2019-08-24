@@ -628,7 +628,7 @@ fn entry() -> Result<(), Failure> {
         info!("Preparing a shell\u{2026}");
 
         // Determine the environment, location, mount settings, ports, and user for the shell.
-        let (task_environment, location, mount_paths, mount_readonly, ports, user) =
+        let (task_environment, location, mount_paths, mount_readonly, ports, docker_args, user) =
             if let Some(last_task) = last_task {
                 // Get the data for the last task.
                 let last_task = &toastfile.tasks[&last_task]; // [ref:tasks_valid]
@@ -647,6 +647,7 @@ fn entry() -> Result<(), Failure> {
                     last_task.mount_paths.to_owned(),
                     last_task.mount_readonly,
                     last_task.ports.to_owned(),
+                    last_task.docker_args.to_owned(),
                     last_task.user.to_owned(),
                 )
             } else {
@@ -657,6 +658,7 @@ fn entry() -> Result<(), Failure> {
                     Path::new("/").to_owned(),
                     vec![],
                     false,
+                    vec![],
                     vec![],
                     "root".to_owned(),
                 )
@@ -675,6 +677,7 @@ fn entry() -> Result<(), Failure> {
             &mount_paths,
             mount_readonly,
             &ports,
+            &docker_args,
             &user,
             &interrupted,
         )?;

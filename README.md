@@ -346,6 +346,7 @@ output_paths: []      # Paths to copy out of the container
 mount_paths: []       # Paths to mount into the container
 mount_readonly: false # Whether to mount the `mount_paths` as readonly
 ports: []             # Port mappings to publish
+docker_args: []       # Additional arguments to pass to docker 
 location: /scratch    # Path in the container for running this task
 user: root            # Name of the user in the container for running this task
 command: ''           # Shell command to run in the container

@@ -101,6 +101,7 @@ pub fn create_container(
     mount_paths: &[PathBuf],
     mount_readonly: bool,
     ports: &[String],
+    docker_args: &[String],
     location: &Path,
     user: &str,
     command: &str,
@@ -120,6 +121,7 @@ pub fn create_container(
         mount_paths,
         mount_readonly,
         ports,
+        docker_args,
     ));
 
     args.extend(
@@ -401,6 +403,7 @@ pub fn spawn_shell(
     mount_paths: &[PathBuf],
     mount_readonly: bool,
     ports: &[String],
+    docker_args: &[String],
     user: &str,
     interrupted: &Arc<AtomicBool>,
 ) -> Result<(), Failure> {
@@ -421,6 +424,7 @@ pub fn spawn_shell(
         mount_paths,
         mount_readonly,
         ports,
+        docker_args,
     ));
 
     args.extend(
@@ -441,6 +445,7 @@ fn container_args(
     mount_paths: &[PathBuf],
     mount_readonly: bool,
     ports: &[String],
+    docker_args: &[String],
 ) -> Vec<String> {
     // Why `--init`? (1) PID 1 is supposed to reap orphaned zombie processes, otherwise they can
     // accumulate. Bash does this, but we run `/bin/sh` in the container, which may or may not be
@@ -505,6 +510,8 @@ fn container_args(
             })
             .collect::<Vec<_>>(),
     );
+
+    args.extend_from_slice(docker_args);
 
     args
 }
