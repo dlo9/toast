@@ -27,7 +27,7 @@ fn add_file<R: Read, W: Write>(
     path: &Path, // Must be relative
     data: R,
     size: u64,
-    executable: bool,
+    mode: u32,
 ) -> Result<(), Failure> {
     // Only visit this path once.
     if !visited_paths.insert(path.to_owned()) {
@@ -37,7 +37,7 @@ fn add_file<R: Read, W: Write>(
     // Construct a tar header for this entry.
     let mut header = Header::new_gnu();
     header.set_entry_type(EntryType::Regular);
-    header.set_mode(if executable { 0o777 } else { 0o666 });
+    header.set_mode(mode);
     header.set_size(size);
 
     // Add the entry to the archive.
@@ -55,6 +55,7 @@ fn add_symlink<W: Write>(
     visited_paths: &mut HashSet<PathBuf>,
     path: &Path, // Must be relative
     target: &Path,
+    mode: u32,
 ) -> Result<(), Failure> {
     // Only visit this path once.
     if !visited_paths.insert(path.to_owned()) {
@@ -67,7 +68,7 @@ fn add_symlink<W: Write>(
     header.set_link_name(target).map_err(failure::system(
         "Error appending symbolic link to tar archive.",
     ))?;
-    header.set_mode(0o777);
+    header.set_mode(mode);
     header.set_size(0);
 
     // Add the entry to the archive.
@@ -84,6 +85,7 @@ fn add_directory<W: Write>(
     builder: &mut Builder<W>,
     visited_paths: &mut HashSet<PathBuf>,
     path: &Path, // Must be relative
+    mode: u32,
 ) -> Result<(), Failure> {
     // Only visit this path once.
     if !visited_paths.insert(path.to_owned()) {
@@ -100,7 +102,7 @@ fn add_directory<W: Write>(
     // Construct a tar header for this entry.
     let mut header = Header::new_gnu();
     header.set_entry_type(EntryType::Directory);
-    header.set_mode(0o777);
+    header.set_mode(mode);
     header.set_size(0);
 
     // Add the entry to the archive.
@@ -125,16 +127,14 @@ fn add_path<W: Write>(
     // here to ensure they have the right permissions.
     if let Some(parent) = destination_path.parent() {
         for ancestor in parent.ancestors() {
-            add_directory(builder, visited_paths, ancestor)?;
+            add_directory(builder, visited_paths, ancestor, 0o777)?;
         }
     }
 
+    let mode = metadata.permissions().mode();
+
     // Check the type of the entry.
     if metadata.file_type().is_file() {
-        // Determine if the file has the executable bit set.
-        let mode = metadata.permissions().mode();
-        let executable = mode & 0o1 > 0 || mode & 0o10 > 0 || mode & 0o100 > 0;
-
         // It's a file. Open it so we can compute the hash of its contents and add it to the
         // archive.
         let mut file = File::open(source_path).map_err(failure::system(format!(
@@ -148,7 +148,7 @@ fn add_path<W: Write>(
                 &destination_path.crypto_hash(),
                 &cache::hash_read(&mut file)?,
             ),
-            if executable { "+x" } else { "-x" },
+            &mode
         ));
 
         // Jump back to the beginning of the file so the tar builder can read it.
@@ -165,7 +165,7 @@ fn add_path<W: Write>(
             destination_path,
             file,
             metadata.len(),
-            executable,
+            mode,
         )
     } else if metadata.file_type().is_symlink() {
         // It's a symlink. Read the target path.
@@ -174,17 +174,23 @@ fn add_path<W: Write>(
             source_path.to_string_lossy().code_str(),
         )))?;
 
-        // Compute the hash of the symlink path and the target path.
-        content_hashes.push(cache::combine(destination_path, &target_path));
+        // Compute the hash of the symlink path, target path, and metadata
+        content_hashes.push(cache::combine(
+            &cache::combine(
+                destination_path,
+                &target_path,
+            ),
+            &mode
+        ));
 
         // Add the symlink to the archive.
-        add_symlink(builder, visited_paths, destination_path, &target_path)
+        add_symlink(builder, visited_paths, destination_path, &target_path, mode)
     } else if metadata.file_type().is_dir() {
-        // It's a directory. Only its name is relevant for the cache key.
-        content_hashes.push(destination_path.crypto_hash());
+        // Compute the hash of the directory path and metadata
+        content_hashes.push(cache::combine(&destination_path.crypto_hash(), &mode));
 
         // Add the directory to the archive.
-        add_directory(builder, visited_paths, destination_path)
+        add_directory(builder, visited_paths, destination_path, mode)
     } else {
         Err(Failure::User(
             format!(
@@ -226,6 +232,7 @@ pub fn create<W: Write>(
         &mut builder,
         &mut visited_paths,
         strip_root(&destination_dir),
+        0o777,
     )?;
 
     // Add each path to the archive.

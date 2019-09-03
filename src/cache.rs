@@ -44,6 +44,12 @@ impl CryptoHash for PathBuf {
     }
 }
 
+impl CryptoHash for u32 {
+    fn crypto_hash(&self) -> String {
+        hex::encode(Sha256::digest(&self.to_ne_bytes()))
+    }
+}
+
 // Combine two strings into a hash. The guarantees:
 //   1. For all `x` and `y`, `combine(x, y)` = `combine(x, y)`.
 //   2. For all known `x1`, `x2`, `y1`, and `y2`,
