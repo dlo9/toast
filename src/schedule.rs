@@ -6,8 +6,7 @@ use std::{collections::HashSet, convert::AsRef};
 // DAG [ref:tasks_dag].
 pub fn compute<'a>(toastfile: &'a Toastfile, tasks: &[&'a str]) -> Vec<&'a str> {
     // Sort the input tasks to ensure the given order doesn't matter.
-    let mut roots: Vec<&'a str> = tasks.to_vec();
-    //roots.sort();
+    let roots: Vec<&'a str> = tasks.to_vec();
 
     // We will use this set to keep track of what tasks have already been seen.
     let mut visited: HashSet<&'a str> = HashSet::new();
@@ -44,17 +43,15 @@ pub fn compute<'a>(toastfile: &'a Toastfile, tasks: &[&'a str]) -> Vec<&'a str> 
                 // Come back to this task once all its dependencies have been processed.
                 frontier.push((task, false));
 
-                // Add the task's dependencies to the frontier. We sort the dependencies first to
-                // ensure their original order doesn't matter. After sorting, we reverse the order
-                // of the dependencies before adding them to the frontier so that they will be
-                // processed in lexicographical order (since the frontier is a stack rather than a
-                // queue). The indexing is safe due to [ref:tasks_valid].
+                // Add the task's dependencies to the frontier. We reverse the order of the
+                // dependencies before adding them to the frontier so that they will be processed
+                // in the correct order (since the frontier is a stack rather than a queue). The
+                // indexing is safe due to [ref:tasks_valid].
                 let mut dependencies: Vec<&'a str> = toastfile.tasks[task]
                     .dependencies
                     .iter()
                     .map(AsRef::as_ref)
                     .collect();
-                //dependencies.sort();
                 dependencies.reverse();
                 frontier.extend(
                     dependencies
