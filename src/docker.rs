@@ -1,10 +1,9 @@
 use crate::{failure, failure::Failure, format::CodeStr, spinner::spin};
 use std::{
     collections::HashMap,
-    fs::{copy, create_dir_all, read_link, rename, symlink_metadata, Metadata},
+    fs::create_dir_all,
     io,
     io::Read,
-    os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::{ChildStdin, Command, Stdio},
     string::ToString,
@@ -13,9 +12,7 @@ use std::{
         Arc,
     },
 };
-use tempfile::tempdir;
 use uuid::Uuid;
-use walkdir::WalkDir;
 
 // Construct a random image tag.
 pub fn random_tag() -> String {
@@ -172,46 +169,6 @@ pub fn copy_into_container<R: Read>(
     .map(|_| ())
 }
 
-// This is a helper function for the `copy_from_container` function. The `source_path` is expected
-// to point to a file or symlink. This function first tries to rename the file or symlink. If that
-// fails, a copy is attempted instead.
-fn rename_or_copy_file_or_symlink(
-    source_path: &Path,
-    destination_path: &Path,
-    metadata: &Metadata,
-) -> Result<(), Failure> {
-    // Try to rename the file or symlink.
-    if rename(source_path, destination_path).is_err() {
-        // The `rename` can fail if the source and the destination are not on the same mounted
-        // filesystem. This occurs for example on Fedora 18+, where `/tmp` is an in-memory tmpfs
-        // filesystem. If this happens, don't give up just yet. We can try to copy the file or
-        // symlink instead of moving it. First, let's determine what it is.
-        if metadata.file_type().is_symlink() {
-            // It's a symlink. Figure out what it points to.
-            let target_path = read_link(source_path).map_err(failure::system(format!(
-                "Unable to read target of symbolic link {}.",
-                source_path.to_string_lossy().code_str(),
-            )))?;
-
-            // Create a copy of the symlink at the destination.
-            symlink(target_path, destination_path).map_err(failure::system(format!(
-                "Unable to create symbolic link at {}.",
-                destination_path.to_string_lossy().code_str(),
-            )))?;
-        } else {
-            // It's a file. Copy it to the destination.
-            copy(source_path, destination_path).map_err(failure::system(format!(
-                "Unable to move or copy file {} to destination {}.",
-                source_path.to_string_lossy().code_str(),
-                destination_path.to_string_lossy().code_str(),
-            )))?;
-        }
-    }
-
-    // If we got here, the `rename` succeeded.
-    Ok(())
-}
-
 // Copy files from a container.
 pub fn copy_from_container(
     container: &str,
@@ -233,16 +190,20 @@ pub fn copy_from_container(
         // `docker cp container:/foo /bar`. The first time that command is run, Docker will create
         // the directory `/bar` on the host and copy the files from `/foo` into it. But if you run
         // it again, Docker will copy `/foo` into the directory `/bar`, resulting in `/bar/foo`,
-        // which is undesirable. To work around this, we first copy the path from the container into
-        // a temporary directory (where the target path is guaranteed to not exist). Then we
-        // copy/move that path to the final destination.
-        let temp_dir =
-            tempdir().map_err(failure::system("Unable to create temporary directory."))?;
-
-        // Figure out what needs to go where.
+        // which is undesirable. To work around this, we first create the parent directory of the
+        // path, and then copy the path into the directory which will always exist. This ensures
         let source = source_dir.join(path);
-        let intermediate = temp_dir.path().join("data");
-        let destination = destination_dir.join(path);
+
+        let destination = if let Some(parent) = path.parent() {
+            destination_dir.join(parent)
+        } else {
+            destination_dir.to_path_buf()
+        };
+
+        create_dir_all(&destination).map_err(failure::system(format!(
+            "Unable to create directory {}.",
+            destination.to_string_lossy().code_str()
+        )))?;
 
         // Get the path from the container.
         run_quiet(
@@ -252,71 +213,10 @@ pub fn copy_from_container(
                 "container".to_owned(),
                 "cp".to_owned(),
                 format!("{}:{}", container, source.to_string_lossy()),
-                intermediate.to_string_lossy().into_owned(),
+                destination.to_string_lossy().into_owned(),
             ],
             interrupted,
-        )
-        .map(|_| ())?;
-
-        // Fetch filesystem metadata for `input_path`.
-        let intermediate_metadata =
-            symlink_metadata(&intermediate).map_err(failure::system(format!(
-                "Unable to fetch filesystem metadata for {}.",
-                intermediate.to_string_lossy().code_str(),
-            )))?;
-
-        // Determine what we got from the container.
-        if intermediate_metadata.is_dir() {
-            // It's a directory. Traverse it.
-            for entry in WalkDir::new(&intermediate) {
-                // If we run into an error traversing the filesystem, report it.
-                let entry = entry.map_err(failure::system(format!(
-                    "Unable to traverse directory {}.",
-                    intermediate.to_string_lossy().code_str(),
-                )))?;
-
-                // Fetch the metadata for this entry.
-                let entry_metadata = entry.metadata().map_err(failure::system(format!(
-                    "Unable to fetch filesystem metadata for {}.",
-                    entry.path().to_string_lossy().code_str(),
-                )))?;
-
-                // Figure out what needs to go where. The `unwrap` is safe because `entry` is
-                // guaranteed to be inside `intermediate` (or equal to it).
-                let entry_source_path = entry.path();
-                let entry_destination_path =
-                    destination.join(entry_source_path.strip_prefix(&intermediate).unwrap());
-
-                // Check if the entry is a file or a directory.
-                if entry.file_type().is_dir() {
-                    // It's a directory. Create a directory at the destination.
-                    create_dir_all(&entry_destination_path).map_err(failure::system(format!(
-                        "Unable to create directory {}.",
-                        entry_destination_path.to_string_lossy().code_str(),
-                    )))?;
-                } else {
-                    // It's a file or symlink. Move or copy it to the destination.
-                    rename_or_copy_file_or_symlink(
-                        entry_source_path,
-                        &entry_destination_path,
-                        &entry_metadata,
-                    )?;
-                }
-            }
-        } else {
-            // It's a file or symlink. Determine the destination directory. The `unwrap` is safe
-            // because the root of the filesystem cannot be a file or symlink.
-            let destination_parent = destination.parent().unwrap().to_owned();
-
-            // Make sure the destination directory exists.
-            create_dir_all(&destination_parent).map_err(failure::system(format!(
-                "Unable to create directory {}.",
-                destination_parent.to_string_lossy().code_str(),
-            )))?;
-
-            // Move or copy it to the destination.
-            rename_or_copy_file_or_symlink(&intermediate, &destination, &intermediate_metadata)?;
-        }
+        )?;
     }
 
     Ok(())
